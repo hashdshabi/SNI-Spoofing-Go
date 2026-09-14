@@ -6,7 +6,7 @@ on:
     types: [published]
 
 jobs:
-  # Manual runs: one matrix job per CLI binary (same pattern as build-gui).
+  # Manual runs: one matrix job per CLI binary.
   build-cli:
     name: Build CLI (${{ matrix.target }})
     if: github.event_name == 'workflow_dispatch'
@@ -69,7 +69,19 @@ jobs:
           name: sni-spoofing-${{ matrix.target }}
           path: ${{ steps.stage.outputs.asset }}
 
-  # Releases: one job builds every CLI target and uploads to the GitHub release.
+      - name: Upload binary to latest release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$(gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName')"
+          if [ -z "$tag" ]; then
+            echo "No published release exists. Create and publish a release first."
+            exit 1
+          fi
+          gh release upload "$tag" "${{ steps.stage.outputs.asset }}" --clobber
+
+  # Releases: build every CLI target and upload to the release that triggered the workflow.
   build-cli-release:
     name: Build CLI (all platforms, release)
     if: github.event_name == 'release'
@@ -101,7 +113,7 @@ jobs:
     name: Build GUI (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     permissions:
-      contents: write # upload release assets
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -165,12 +177,25 @@ jobs:
             shasum -a 256 "$asset"
           fi
 
-      - name: Upload artifacts (manual runs)
+      - name: Upload artifact (manual runs)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: sni-spoofing-gui-${{ matrix.target }}
           path: ${{ steps.stage.outputs.asset }}
+
+      - name: Upload GUI binary to latest release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$(gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName')"
+          if [ -z "$tag" ]; then
+            echo "No published release exists. Create and publish a release first."
+            exit 1
+          fi
+          gh release upload "$tag" "${{ steps.stage.outputs.asset }}" --clobber
 
       - name: Upload assets to release
         if: github.event_name == 'release'
