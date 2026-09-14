@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -23,9 +24,7 @@ type SavedAppConfig struct {
 
 func configINIPath() (string, error) {
 	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
+	if err != nil { return "", err }
 	return filepath.Join(filepath.Dir(exe), "config.ini"), nil
 }
 
@@ -40,56 +39,30 @@ func LoadSavedConfig(a *App) (SavedAppConfig, error) {
 	cfg := a.GetDefaultConfig()
 	presets := defaultPresets()
 	path, err := configINIPath()
-	if err != nil {
-		return SavedAppConfig{Config: cfg, Presets: presets}, err
-	}
+	if err != nil { return SavedAppConfig{Config: cfg, Presets: presets}, err }
 	f, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return SavedAppConfig{Config: cfg, Presets: presets}, nil
-	}
-	if err != nil {
-		return SavedAppConfig{Config: cfg, Presets: presets}, err
-	}
+	if os.IsNotExist(err) { return SavedAppConfig{Config: cfg, Presets: presets}, nil }
+	if err != nil { return SavedAppConfig{Config: cfg, Presets: presets}, err }
 	defer f.Close()
 
 	section := ""
-	loadedPresets := make([]Preset, 0)
 	pending := map[int]*Preset{}
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())
-		if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "#") {
-			continue
-		}
+		if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "#") { continue }
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))
-			continue
+			section = strings.ToLower(strings.TrimSpace(line[1:len(line)-1])); continue
 		}
 		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
+		if len(parts) != 2 { continue }
+		key, value := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 		if section == "presets" && strings.HasPrefix(key, "preset.") {
-			p, ok := strings.CutPrefix(key, "preset.")
-			idxText, field, ok := strings.Cut(p, ".")
-			if !ok {
-				continue
-			}
-			idx, e := strconv.Atoi(idxText)
-			if e != nil || idx < 0 {
-				continue
-			}
-			if pending[idx] == nil {
-				pending[idx] = &Preset{}
-			}
-			switch field {
-			case "fake-sni":
-				pending[idx].FakeSNI = value
-			case "upstream":
-				pending[idx].Upstream = value
-			}
+			p, ok := strings.CutPrefix(key, "preset."); if !ok { continue }
+			idxText, field, ok := strings.Cut(p, "."); if !ok { continue }
+			idx, e := strconv.Atoi(idxText); if e != nil || idx < 0 { continue }
+			if pending[idx] == nil { pending[idx] = &Preset{} }
+			switch field { case "fake-sni": pending[idx].FakeSNI = value; case "upstream": pending[idx].Upstream = value }
 			continue
 		}
 		switch key {
@@ -106,50 +79,34 @@ func LoadSavedConfig(a *App) (SavedAppConfig, error) {
 		case "sni-chunk": if n, e := strconv.Atoi(value); e == nil { cfg.SNIChunk = n }
 		}
 	}
-	if err := s.Err(); err != nil {
-		return SavedAppConfig{Config: cfg, Presets: presets}, err
-	}
-	for i := 0; i <= len(pending); i++ {
-		if p := pending[i]; p != nil && strings.TrimSpace(p.FakeSNI) != "" && strings.TrimSpace(p.Upstream) != "" {
-			loadedPresets = append(loadedPresets, *p)
-		}
-	}
-	if len(loadedPresets) > 0 {
-		presets = normalizePresets(loadedPresets)
-	}
+	if err := s.Err(); err != nil { return SavedAppConfig{Config: cfg, Presets: presets}, err }
+	indices := make([]int, 0, len(pending)); for i := range pending { indices = append(indices, i) }; sort.Ints(indices)
+	loaded := make([]Preset, 0, len(indices))
+	for _, i := range indices { p := pending[i]; if strings.TrimSpace(p.FakeSNI) != "" && strings.TrimSpace(p.Upstream) != "" { loaded = append(loaded, *p) } }
+	if len(loaded) > 0 { presets = normalizePresets(loaded) }
 	return SavedAppConfig{Config: cfg, Presets: presets}, nil
 }
 
-func parseDurationMs(v string) (int, error) {
-	v = strings.TrimSpace(strings.TrimSuffix(strings.ToLower(v), "ms"))
-	return strconv.Atoi(v)
-}
+func parseDurationMs(v string) (int, error) { return strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(strings.ToLower(v), "ms"))) }
 
 func normalizePresets(in []Preset) []Preset {
-	out := make([]Preset, 0, len(in))
-	seen := map[string]bool{}
+	out := make([]Preset, 0, len(in)); seen := map[string]bool{}
 	for _, p := range in {
-		p.FakeSNI = strings.TrimSpace(p.FakeSNI)
-		p.Upstream = strings.TrimSpace(p.Upstream)
+		p.FakeSNI, p.Upstream = strings.TrimSpace(p.FakeSNI), strings.TrimSpace(p.Upstream)
 		if p.FakeSNI == "" || p.Upstream == "" { continue }
 		key := strings.ToLower(p.FakeSNI) + "\x00" + strings.ToLower(p.Upstream)
-		if seen[key] { continue }
-		seen[key] = true
-		out = append(out, p)
+		if seen[key] { continue }; seen[key] = true; out = append(out, p)
 	}
 	return out
 }
 
 func SaveConfigFile(cfg ProxyConfig, presets []Preset) error {
 	if err := guiapi.ValidateConfig(cfg); err != nil { return err }
-	path, err := configINIPath()
-	if err != nil { return err }
+	path, err := configINIPath(); if err != nil { return err }
 	presets = normalizePresets(presets)
 	var b strings.Builder
-	fmt.Fprintf(&b, "listen=%s\nconnect=%s\nfake-sni=%s\nutls=%s\ninjector=%s\nfake-repeat=%d\nfake-delay=%dms\nack-timeout=%dms\nenable-fragment=%t\nfragment-delay=%dms\nsni-chunk=%d\n\n[presets]\n", cfg.Listen, cfg.Connect, cfg.FakeSNI, cfg.UTLS, cfg.Injector, cfg.FakeRepeat, cfg.FakeDelayMs, cfg.AckTimeoutMs, cfg.EnableFragment, cfg.FragmentDelayMs, cfg.SNIChunk)
-	for i, p := range presets {
-		fmt.Fprintf(&b, "preset.%d.fake-sni=%s\npreset.%d.upstream=%s\n", i, p.FakeSNI, i, p.Upstream)
-	}
+	fmt.Fprintf(&b, "id=\"954bro\"\nlisten=%s\nconnect=%s\nfake-sni=%s\nutls=%s\ninjector=%s\nfake-repeat=%d\nfake-delay=%dms\nack-timeout=%dms\nenable-fragment=%t\nfragment-delay=%dms\nsni-chunk=%d\n\n[presets]\n", cfg.Listen, cfg.Connect, cfg.FakeSNI, cfg.UTLS, cfg.Injector, cfg.FakeRepeat, cfg.FakeDelayMs, cfg.AckTimeoutMs, cfg.EnableFragment, cfg.FragmentDelayMs, cfg.SNIChunk)
+	for i, p := range presets { fmt.Fprintf(&b, "preset.%d.fake-sni=%s\npreset.%d.upstream=%s\n", i, p.FakeSNI, i, p.Upstream) }
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, []byte(b.String()), 0644); err != nil { return err }
 	if err := os.Rename(tmp, path); err != nil { _ = os.Remove(tmp); return err }
