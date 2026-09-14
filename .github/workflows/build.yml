@@ -15,16 +15,20 @@ jobs:
     outputs:
       tag: ${{ steps.release.outputs.tag }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Find or create release
         id: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          tag="$(gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName')"
+          tag="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName')"
           if [ -z "$tag" ]; then
             tag="build-${GITHUB_RUN_NUMBER}"
             gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
               --title "Build ${GITHUB_RUN_NUMBER}" \
               --notes "Automatic build from ${GITHUB_SHA}." \
               --target "${GITHUB_SHA}"
@@ -105,7 +109,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release upload "${{ needs.prepare-manual-release.outputs.tag }}" "${{ steps.stage.outputs.asset }}" --clobber
+          gh release upload "${{ needs.prepare-manual-release.outputs.tag }}" "${{ steps.stage.outputs.asset }}" --repo "$GITHUB_REPOSITORY" --clobber
 
   # Releases: build every CLI target and upload to the release that triggered the workflow.
   build-cli-release:
@@ -133,7 +137,7 @@ jobs:
       - name: Upload assets to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --repo "$GITHUB_REPOSITORY" --clobber
 
   build-gui:
     name: Build GUI (${{ matrix.target }})
@@ -216,7 +220,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release upload "${{ needs.prepare-manual-release.outputs.tag }}" "${{ steps.stage.outputs.asset }}" --clobber
+          gh release upload "${{ needs.prepare-manual-release.outputs.tag }}" "${{ steps.stage.outputs.asset }}" --repo "$GITHUB_REPOSITORY" --clobber
 
   build-gui-release:
     name: Build GUI (${{ matrix.target }}) for release
@@ -290,7 +294,7 @@ jobs:
       - name: Upload GUI binary to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.event.release.tag_name }}" "${{ steps.stage.outputs.asset }}" --clobber
+        run: gh release upload "${{ github.event.release.tag_name }}" "${{ steps.stage.outputs.asset }}" --repo "$GITHUB_REPOSITORY" --clobber
 
   build-and-push-image:
     name: Build and push multi-arch Docker image
